@@ -213,9 +213,9 @@ export function useHandTracking(options: UseHandTrackingOptions = {}) {
   const wasFiveFingerRef = useRef(false);
   
   // Configuration constants
-  const PINCH_THRESHOLD = 0.06;
-  const PINCH_EXCLUSION_THRESHOLD = 0.10;
-  const PINCH_STABILITY_FRAMES = 3;
+  const PINCH_THRESHOLD = 0.08;
+  const PINCH_EXCLUSION_THRESHOLD = 0.08;
+  const PINCH_STABILITY_FRAMES = 2;
   const PINCH_MIN_HOLD_MS = 150;
   const PINCH_MAX_HOLD_MS = 600;
   const SELECT_COOLDOWN_MS = 500;
