@@ -6,6 +6,10 @@ import { useTreeMemories } from '@/hooks/useTreeMemories';
 import { AdminPanel } from './AdminPanel';
 import { Loader2 } from 'lucide-react';
 
+// Constants for delta-based rotation
+const ROTATION_SENSITIVITY = Math.PI * 2.5;
+const VERTICAL_SENSITIVITY = 1.2;
+
 export function MemoryTreeUI() {
   const { 
     setTargetOrbitX, 
@@ -50,27 +54,33 @@ export function MemoryTreeUI() {
   // Track if we're in 5-finger mode for rotation multiplier
   const rotationMultiplierRef = useRef(1);
   
-  const handleIndexMove = useCallback((x: number, y: number) => {
+  // Accumulated orbit state for infinite rotation
+  const accumulatedOrbitX = useRef(0);
+  const accumulatedOrbitY = useRef(0.3); // Start slightly elevated
+  
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const handleIndexMove = useCallback((x: number, _y: number) => {
     // Map hand X position to memory selection (0-1 range, mirrored)
     const memoryIndex = Math.floor((1 - x) * treeMemories.length);
     const clampedIndex = Math.max(0, Math.min(treeMemories.length - 1, memoryIndex));
     memoryIndexRef.current = clampedIndex;
     setHoveredIndex(clampedIndex);
     setHighlightedMemoryIndex(clampedIndex);
+  }, [treeMemories.length, setHighlightedMemoryIndex]);
+  
+  // Delta-based rotation: accumulate movement for infinite spinning
+  const handleDeltaMove = useCallback((deltaX: number, deltaY: number) => {
+    const mult = rotationMultiplierRef.current;
     
-    // Use index finger X to orbit camera horizontally
-    // Map 0-1 to orbit range (-PI/2 to PI/2)
-    // Apply rotation multiplier for 5-finger mode
-    const baseOrbitX = (0.5 - x) * Math.PI;
-    const newOrbitX = baseOrbitX * rotationMultiplierRef.current;
-    setTargetOrbitX(newOrbitX);
+    // Accumulate horizontal rotation (negative because hand moves opposite to camera orbit)
+    accumulatedOrbitX.current += -deltaX * ROTATION_SENSITIVITY * mult;
+    setTargetOrbitX(accumulatedOrbitX.current);
     
-    // Use index finger Y to orbit camera vertically
-    // Map 0-1 to pitch range (-0.2 to 0.6)
-    const baseOrbitY = (0.5 - y) * 0.8 + 0.2;
-    const newOrbitY = baseOrbitY * Math.min(rotationMultiplierRef.current, 1.5); // Cap vertical mult
-    setTargetOrbitY(newOrbitY);
-  }, [treeMemories.length, setTargetOrbitX, setTargetOrbitY, setHighlightedMemoryIndex]);
+    // Accumulate vertical rotation with clamping
+    accumulatedOrbitY.current += -deltaY * VERTICAL_SENSITIVITY * Math.min(mult, 1.5);
+    accumulatedOrbitY.current = Math.max(-0.3, Math.min(0.8, accumulatedOrbitY.current));
+    setTargetOrbitY(accumulatedOrbitY.current);
+  }, [setTargetOrbitX, setTargetOrbitY]);
   
   const handleZoom = useCallback((delta: number) => {
     // Adjust camera distance - positive delta = zoom out, negative = zoom in
@@ -103,6 +113,7 @@ export function MemoryTreeUI() {
     enabled: handTrackingEnabled,
     onPinchSelect: handlePinchSelect,
     onIndexMove: handleIndexMove,
+    onDeltaMove: handleDeltaMove,
     onZoom: handleZoom,
     onFiveFingerZoom: handleFiveFingerZoom,
     onScrollMove: handleScrollMove,

@@ -55,23 +55,27 @@ interface HandGesture {
   isTapping: boolean;
   isZooming: boolean;
   zoomDelta: number;
-  // New: 5-finger mode
+  // 5-finger mode
   isFiveFingerMode: boolean;
   handSpread: number;
   spreadDelta: number;
   rotationMultiplier: number;
-  // New: 1-finger scroll mode (4 fingers clumped, index extended)
+  // 1-finger scroll mode (4 fingers clumped, index extended)
   isScrollMode: boolean;
   scrollY: number;
+  // Delta-based movement (frame-to-frame change)
+  deltaX: number;
+  deltaY: number;
 }
 
 interface UseHandTrackingOptions {
   enabled?: boolean;
   onPinchSelect?: () => void;
   onIndexMove?: (x: number, y: number) => void;
+  onDeltaMove?: (deltaX: number, deltaY: number) => void;
   onZoom?: (delta: number) => void;
   onFiveFingerZoom?: (delta: number) => void;
-  onScrollMove?: (y: number) => void; // New: 1-finger scroll callback
+  onScrollMove?: (y: number) => void;
 }
 
 // Finger landmark indices
@@ -142,6 +146,7 @@ export function useHandTracking(options: UseHandTrackingOptions = {}) {
   // Store callbacks in refs to avoid dependency issues
   const onPinchSelectRef = useRef(options.onPinchSelect);
   const onIndexMoveRef = useRef(options.onIndexMove);
+  const onDeltaMoveRef = useRef(options.onDeltaMove);
   const onZoomRef = useRef(options.onZoom);
   const onFiveFingerZoomRef = useRef(options.onFiveFingerZoom);
   const onScrollMoveRef = useRef(options.onScrollMove);
@@ -150,10 +155,11 @@ export function useHandTracking(options: UseHandTrackingOptions = {}) {
   useEffect(() => {
     onPinchSelectRef.current = options.onPinchSelect;
     onIndexMoveRef.current = options.onIndexMove;
+    onDeltaMoveRef.current = options.onDeltaMove;
     onZoomRef.current = options.onZoom;
     onFiveFingerZoomRef.current = options.onFiveFingerZoom;
     onScrollMoveRef.current = options.onScrollMove;
-  }, [options.onPinchSelect, options.onIndexMove, options.onZoom, options.onFiveFingerZoom, options.onScrollMove]);
+  }, [options.onPinchSelect, options.onIndexMove, options.onDeltaMove, options.onZoom, options.onFiveFingerZoom, options.onScrollMove]);
   
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
@@ -182,7 +188,13 @@ export function useHandTracking(options: UseHandTrackingOptions = {}) {
     rotationMultiplier: 1,
     isScrollMode: false,
     scrollY: 0.5,
+    deltaX: 0,
+    deltaY: 0,
   });
+  
+  // Delta tracking: store last known hand position for frame-to-frame diff
+  const lastHandPosRef = useRef<{ x: number; y: number } | null>(null);
+  const handVisibleLastFrameRef = useRef(false);
   
   // Only update state periodically for UI display
   const [gesture, setGesture] = useState<HandGesture>(gestureRef.current);
@@ -347,7 +359,20 @@ export function useHandTracking(options: UseHandTrackingOptions = {}) {
           // Apply exponential smoothing to index position (reduces jitter)
           smoothedIndexRef.current.x += (index.x - smoothedIndexRef.current.x) * SMOOTHING_FACTOR;
           smoothedIndexRef.current.y += (index.y - smoothedIndexRef.current.y) * SMOOTHING_FACTOR;
-          // const smoothedIndex = smoothedIndexRef.current; // Unused variable removed
+          
+          // ======= DELTA CALCULATION =======
+          let deltaX = 0;
+          let deltaY = 0;
+          const DELTA_DEADZONE = 0.002; // Ignore micro-jitter
+          
+          if (lastHandPosRef.current && handVisibleLastFrameRef.current) {
+            const rawDeltaX = index.x - lastHandPosRef.current.x;
+            const rawDeltaY = index.y - lastHandPosRef.current.y;
+            deltaX = Math.abs(rawDeltaX) > DELTA_DEADZONE ? rawDeltaX : 0;
+            deltaY = Math.abs(rawDeltaY) > DELTA_DEADZONE ? rawDeltaY : 0;
+          }
+          lastHandPosRef.current = { x: index.x, y: index.y };
+          handVisibleLastFrameRef.current = true;
           
           // Draw hand visualization on canvas
           if (ctx) {
@@ -498,6 +523,11 @@ export function useHandTracking(options: UseHandTrackingOptions = {}) {
             onScrollMoveRef.current?.(index.y);
           }
           
+          // ======= EMIT DELTA MOVEMENT (for accumulative rotation) =======
+          if ((deltaX !== 0 || deltaY !== 0) && !isScrollMode) {
+            onDeltaMoveRef.current?.(deltaX, deltaY);
+          }
+          
           // ======= INDEX MOVEMENT (only when NOT in scroll mode) =======
           if (!isScrollMode) {
             onIndexMoveRef.current?.(index.x, index.y);
@@ -518,6 +548,8 @@ export function useHandTracking(options: UseHandTrackingOptions = {}) {
             rotationMultiplier,
             isScrollMode,
             scrollY: index.y,
+            deltaX,
+            deltaY,
           };
           
           // Update ref immediately (for callbacks)
@@ -532,6 +564,10 @@ export function useHandTracking(options: UseHandTrackingOptions = {}) {
               lastStateUpdateRef.current = now;
             }
           }
+        } else {
+          // No hand detected: reset delta tracking
+          lastHandPosRef.current = null;
+          handVisibleLastFrameRef.current = false;
         }
       });
       
