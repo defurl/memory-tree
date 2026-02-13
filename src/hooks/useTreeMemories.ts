@@ -1,37 +1,8 @@
 import { useState, useEffect, useCallback } from 'react';
 import { toast } from 'sonner';
 import { useAppStore, TreeMemory } from '@/stores/useAppStore';
+import { supabase } from '@/lib/supabase';
 import { v4 as uuidv4 } from 'uuid';
-
-const STORAGE_KEY = 'memory-tree-data';
-
-// Helper to check image size (MAX_IMAGE_SIZE removed)
-
-const compressImage = (file: File): Promise<string> => {
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.readAsDataURL(file);
-    reader.onload = (event) => {
-      const img = new Image();
-      img.src = event.target?.result as string;
-      img.onload = () => {
-        const canvas = document.createElement('canvas');
-        const MAX_WIDTH = 800;
-        const scaleSize = MAX_WIDTH / img.width;
-        canvas.width = MAX_WIDTH;
-        canvas.height = img.height * scaleSize;
-        
-        const ctx = canvas.getContext('2d');
-        ctx?.drawImage(img, 0, 0, canvas.width, canvas.height);
-        
-        // Compress to JPEG with 0.7 quality
-        resolve(canvas.toDataURL('image/jpeg', 0.7));
-      };
-      img.onerror = (error) => reject(error);
-    };
-    reader.onerror = (error) => reject(error);
-  });
-};
 
 export function useTreeMemories() {
   const [memories, setMemories] = useState<TreeMemory[]>([]);
@@ -39,69 +10,110 @@ export function useTreeMemories() {
   const [error, setError] = useState<string | null>(null);
   const { setTreeMemories } = useAppStore();
 
-  const fetchMemories = useCallback(() => {
+  const fetchMemories = useCallback(async () => {
     try {
       setLoading(true);
-      const stored = localStorage.getItem(STORAGE_KEY);
-      if (stored) {
-        const parsed = JSON.parse(stored);
-        setMemories(parsed);
-        setTreeMemories(parsed);
-      } else {
-        // Initial empty state
-        setMemories([]);
-        setTreeMemories([]);
+      const { data, error } = await supabase
+        .from('memories')
+        .select('*')
+        .order('created_at', { ascending: true });
+
+      if (error) throw error;
+
+      if (data) {
+        setMemories(data);
+        setTreeMemories(data);
       }
     } catch (err) {
       console.error('Failed to load memories:', err);
+      // Don't show toast on initial load failure to avoid annoyance if offline
       setError('Failed to load memories');
     } finally {
       setLoading(false);
     }
   }, [setTreeMemories]);
 
+  // Initial fetch
   useEffect(() => {
     fetchMemories();
+    
+    // Realtime subscription could go here
   }, [fetchMemories]);
 
   const uploadMemory = async (file: File, label: string, year: string): Promise<boolean> => {
     try {
-      // Compress and convert to Base64
-      const base64Image = await compressImage(file);
+      const { data: { user } } = await supabase.auth.getUser();
+      console.log('Current User:', user);
       
-      const newMemory: TreeMemory = {
-        id: uuidv4(),
-        label,
-        year,
-        image_url: base64Image,
-        created_at: new Date().toISOString(),
-      };
-
-      const updatedMemories = [...memories, newMemory];
-      
-      try {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(updatedMemories));
-        setMemories(updatedMemories);
-        setTreeMemories(updatedMemories);
-        toast.success('Memory saved locally');
-        return true;
-      } catch (e) {
-        toast.error('Storage full! Delete some memories first.');
+      if (!user) {
+        toast.error('You are not logged in!');
         return false;
       }
+
+      const fileName = `${uuidv4()}-${file.name.replace(/[^a-zA-Z0-9.]/g, '')}`;
+      
+      // 1. Upload to Storage
+      const { error: uploadError } = await supabase.storage
+        .from('memory-images')
+        .upload(fileName, file);
+
+      if (uploadError) {
+        console.error('Storage Upload Error:', uploadError);
+        throw new Error(`Storage: ${uploadError.message}`);
+      }
+
+      // 2. Get Public URL
+      const { data: { publicUrl } } = supabase.storage
+        .from('memory-images')
+        .getPublicUrl(fileName);
+
+      // 3. Insert into Table
+      const newMemory = {
+        label,
+        year,
+        image_url: publicUrl,
+      };
+
+      const { data, error: dbError } = await supabase
+        .from('memories')
+        .insert(newMemory)
+        .select()
+        .single();
+
+      if (dbError) {
+        console.error('DB Insert Error:', dbError);
+        throw new Error(`Database: ${dbError.message}`);
+      }
+
+      if (data) {
+        const updated = [...memories, data];
+        setMemories(updated);
+        setTreeMemories(updated);
+        toast.success('Memory uploaded successfully');
+        return true;
+      }
+      return false;
+
     } catch (err) {
       console.error('Upload error:', err);
-      toast.error('Failed to process image');
+      const message = err instanceof Error ? err.message : 'Unknown error';
+      toast.error(`Failed to upload: ${message}`);
       return false;
     }
   };
 
   const deleteMemory = async (id: string): Promise<boolean> => {
     try {
-      const updatedMemories = memories.filter(m => m.id !== id);
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(updatedMemories));
-      setMemories(updatedMemories);
-      setTreeMemories(updatedMemories);
+      const { error } = await supabase
+        .from('memories')
+        .delete()
+        .eq('id', id);
+
+      if (error) throw error;
+
+      const updated = memories.filter(m => m.id !== id);
+      setMemories(updated);
+      setTreeMemories(updated);
       toast.success('Memory deleted');
       return true;
     } catch (err) {
@@ -113,20 +125,19 @@ export function useTreeMemories() {
 
   const updateMemory = async (id: string, label?: string, year?: string): Promise<boolean> => {
     try {
-      const updatedMemories = memories.map(m => {
-        if (m.id === id) {
-          return {
-            ...m,
-            label: label || m.label,
-            year: year || m.year,
-          };
-        }
-        return m;
-      });
+      const { error } = await supabase
+        .from('memories')
+        .update({ label, year })
+        .eq('id', id);
+
+      if (error) throw error;
+
+      const updated = memories.map(m => 
+        m.id === id ? { ...m, ...(label && { label }), ...(year && { year }) } : m
+      );
       
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(updatedMemories));
-      setMemories(updatedMemories);
-      setTreeMemories(updatedMemories);
+      setMemories(updated);
+      setTreeMemories(updated);
       toast.success('Memory updated');
       return true;
     } catch (err) {

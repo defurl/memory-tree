@@ -1,17 +1,14 @@
 import { useState, useRef } from 'react';
-import { useAppStore } from '@/stores/useAppStore';
+import { useAppStore, TreeMemory } from '@/stores/useAppStore';
 import { useTreeMemories } from '@/hooks/useTreeMemories';
+import { supabase } from '@/lib/supabase';
 import { GlassCard } from './GlassCard';
 import { toast } from 'sonner';
 import { Loader2, Upload, Trash2, Edit2, X, Lock, Unlock } from 'lucide-react';
 
 export function AdminPanel() {
-  const { 
-    isAuthenticated, 
-    setIsAuthenticated, 
-    adminPassword,
-    setAdminPassword
-  } = useAppStore();
+  const session = useAppStore((state) => state.session);
+  const isAuthenticated = !!session;
   
   const { 
     memories, 
@@ -22,7 +19,10 @@ export function AdminPanel() {
   } = useTreeMemories();
   
   const [isOpen, setIsOpen] = useState(false);
-  const [passwordInput, setPasswordInput] = useState('');
+  const [email, setEmail] = useState('');
+  const [password, setPassword] = useState('');
+  const [isLoggingIn, setIsLoggingIn] = useState(false);
+  
   const [activeTab, setActiveTab] = useState<'list' | 'add'>('list');
   
   // Form state
@@ -37,22 +37,30 @@ export function AdminPanel() {
   const [editLabel, setEditLabel] = useState('');
   const [editYear, setEditYear] = useState('');
   
-  const handleLogin = (e: React.FormEvent) => {
+  const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
-    // Simple hardcoded password for standalone demo - in real app use env or backend
-    if (passwordInput === 'admin123' || passwordInput === adminPassword) {
-      setIsAuthenticated(true);
-      setAdminPassword(passwordInput);
-      toast.success('Admin access granted');
+    setIsLoggingIn(true);
+    
+    const { error } = await supabase.auth.signInWithPassword({
+      email,
+      password,
+    });
+
+    if (error) {
+      toast.error(error.message);
     } else {
-      toast.error('Invalid password');
+      toast.success('Admin access granted');
+      setEmail('');
+      setPassword('');
+      // Session is updated via onAuthStateChange in App.tsx
     }
+    setIsLoggingIn(false);
   };
   
-  const handleLogout = () => {
-    setIsAuthenticated(false);
-    setPasswordInput('');
+  const handleLogout = async () => {
+    await supabase.auth.signOut();
     setIsOpen(false);
+    toast.success('Logged out');
   };
   
   const handleUpload = async (e: React.FormEvent) => {
@@ -75,7 +83,7 @@ export function AdminPanel() {
     }
   };
   
-  const startEdit = (memory: any) => {
+  const startEdit = (memory: TreeMemory) => {
     setEditingId(memory.id);
     setEditLabel(memory.label);
     setEditYear(memory.year);
@@ -122,23 +130,30 @@ export function AdminPanel() {
         {!isAuthenticated ? (
           <div className="p-8 flex flex-col items-center justify-center gap-4">
             <p className="text-muted-foreground text-center mb-4">
-              Enter password to manage memories.
-              <br/>
-              <span className="text-xs opacity-50">(Default: admin123)</span>
+              Sign in to manage memories.
             </p>
-            <form onSubmit={handleLogin} className="flex gap-2 w-full max-w-xs">
+            <form onSubmit={handleLogin} className="flex flex-col gap-3 w-full max-w-xs">
+              <input
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="Email"
+                className="bg-white/5 border border-white/10 rounded px-3 py-2 text-white focus:outline-none focus:border-primary/50"
+              />
               <input
                 type="password"
-                value={passwordInput}
-                onChange={(e) => setPasswordInput(e.target.value)}
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
                 placeholder="Password"
-                className="flex-1 bg-white/5 border border-white/10 rounded px-3 py-2 text-white focus:outline-none focus:border-primary/50"
+                className="bg-white/5 border border-white/10 rounded px-3 py-2 text-white focus:outline-none focus:border-primary/50"
               />
               <button 
                 type="submit"
-                className="bg-primary text-primary-foreground px-4 py-2 rounded font-medium hover:bg-primary/90 transition-colors"
+                disabled={isLoggingIn}
+                className="bg-primary text-primary-foreground px-4 py-2 rounded font-medium hover:bg-primary/90 transition-colors disabled:opacity-50 flex items-center justify-center gap-2"
               >
-                Login
+                 {isLoggingIn && <Loader2 className="w-4 h-4 animate-spin" />}
+                 Login
               </button>
             </form>
           </div>

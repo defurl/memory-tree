@@ -9,12 +9,16 @@ export interface TreeMemory {
   created_at: string;
 }
 
+import { Session } from '@supabase/supabase-js';
+
+// ... (TreeMemory interface remains the same)
+
 interface AppState {
-  // Admin Access (simple local password)
-  adminPassword: string;
-  setAdminPassword: (password: string) => void;
-  isAuthenticated: boolean;
-  setIsAuthenticated: (auth: boolean) => void;
+  // Auth State
+  session: Session | null;
+  setSession: (session: Session | null) => void;
+  // Computed property for easier checking
+  isAuthenticated: () => boolean;
 
   // Camera Permission
   cameraPermission: 'pending' | 'granted' | 'denied';
@@ -39,11 +43,10 @@ interface AppState {
   toggleMute: () => void;
 }
 
-export const useAppStore = create<AppState>((set) => ({
-  adminPassword: '',
-  setAdminPassword: (adminPassword) => set({ adminPassword }),
-  isAuthenticated: false,
-  setIsAuthenticated: (isAuthenticated) => set({ isAuthenticated }),
+export const useAppStore = create<AppState>((set, get) => ({
+  session: null,
+  setSession: (session) => set({ session }),
+  isAuthenticated: () => !!get().session,
 
   cameraPermission: 'pending',
   setCameraPermission: (cameraPermission) => set({ cameraPermission }),
